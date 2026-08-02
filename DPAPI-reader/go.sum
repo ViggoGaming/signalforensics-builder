@@ -1,0 +1,4 @@
+github.com/wat4r/dpapitk v1.0.1 h1:Jz6qEkF0/RdLHM9fDqIFdyxawN+Jhv+tn2XEQwkqz0Y=
+github.com/wat4r/dpapitk v1.0.1/go.mod h1:Y/9a6DFuESqlqnEk4xtgMZ+W8ks04CU7dmBgBdb8K4I=
+golang.org/x/crypto v0.17.0 h1:r8bRNjWL3GshPW3gkd+RpvzWrZAwPS49OmTGZ/uhM4k=
+golang.org/x/crypto v0.17.0/go.mod h1:gCAAfMLgwOJRpTjQ2zCCt2OcSfYMTeZVSRtQlPC7Nq4=

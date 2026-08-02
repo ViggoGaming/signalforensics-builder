@@ -105,15 +105,20 @@ jobs:
         uses: softprops/action-gh-release@v2
         with:
           tag_name: ${{ env.RELEASE_TAG }}
-          name: SignalForensics
+          name: Latest builds
           body: |
-            Windows executable build of [labcif/SignalForensics](https://github.com/labcif/SignalForensics).
+            Windows builds published by this repository.
 
-            **Upstream commit:** [`${{ env.SIGNAL_FORENSICS_REF }}`](https://github.com/labcif/SignalForensics/commit/${{ env.SIGNAL_FORENSICS_REF }})
+            ### SignalForensics
+            Built from [labcif/SignalForensics](https://github.com/labcif/SignalForensics) @ [`${{ env.SIGNAL_FORENSICS_REF }}`](https://github.com/labcif/SignalForensics/commit/${{ env.SIGNAL_FORENSICS_REF }}).
 
-            ### Usage
             ```
             SignalForensics.exe -h
+            ```
+
+            ### DPAPI-reader
+            ```
+            DPAPI-reader.exe -user <username> -password <password>
             ```
           files: SignalForensics/dist/SignalForensics.exe
           fail_on_unmatched_files: true

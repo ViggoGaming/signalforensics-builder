@@ -1,0 +1,62 @@
+name: Build DPAPI-reader EXE
+
+on:
+  workflow_dispatch:
+
+env:
+  GO_VERSION: "1.23.x"
+  RELEASE_TAG: latest
+
+permissions:
+  contents: write
+
+jobs:
+  build:
+    runs-on: windows-latest
+    steps:
+      - name: Checkout builder
+        uses: actions/checkout@v4
+
+      - name: Set up Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: ${{ env.GO_VERSION }}
+          cache-dependency-path: DPAPI-reader/go.sum
+
+      - name: Build DPAPI-reader EXE
+        working-directory: DPAPI-reader
+        shell: pwsh
+        run: |
+          go build -trimpath -ldflags="-s -w" -o DPAPI-reader.exe .
+          if (-not (Test-Path "DPAPI-reader.exe")) {
+            throw "EXE was not produced at DPAPI-reader\DPAPI-reader.exe"
+          }
+          Get-Item "DPAPI-reader.exe" | Format-List Name, Length, LastWriteTime
+
+      - name: Upload build artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: DPAPI-reader-windows
+          path: DPAPI-reader/DPAPI-reader.exe
+          if-no-files-found: error
+
+      - name: Create GitHub Release
+        uses: softprops/action-gh-release@v2
+        with:
+          tag_name: ${{ env.RELEASE_TAG }}
+          name: Latest builds
+          body: |
+            Windows builds published by this repository.
+
+            ### SignalForensics
+            ```
+            SignalForensics.exe -h
+            ```
+
+            ### DPAPI-reader
+            ```
+            DPAPI-reader.exe -user <username> -password <password>
+            ```
+          files: DPAPI-reader/DPAPI-reader.exe
+          fail_on_unmatched_files: true
+          make_latest: true
