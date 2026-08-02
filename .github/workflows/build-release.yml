@@ -1,13 +1,7 @@
-name: Build SignalForensics EXE
+name: build signalforensics
 
 on:
   workflow_dispatch:
-
-env:
-  # Pinned upstream commit
-  SIGNAL_FORENSICS_REF: 6d8c36ee4f317403d33c2d0357fcbcf7ee28d710
-  PYTHON_VERSION: "3.11"
-  RELEASE_TAG: latest
 
 permissions:
   contents: write
@@ -16,110 +10,45 @@ jobs:
   build:
     runs-on: windows-latest
     steps:
-      - name: Checkout builder
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
 
-      - name: Checkout SignalForensics
-        uses: actions/checkout@v4
+      - uses: actions/checkout@v4
         with:
           repository: labcif/SignalForensics
-          ref: ${{ env.SIGNAL_FORENSICS_REF }}
+          ref: 6d8c36ee4f317403d33c2d0357fcbcf7ee28d710
           path: SignalForensics
 
-      - name: Verify pinned commit
-        shell: bash
-        working-directory: SignalForensics
-        run: |
-          HEAD="$(git rev-parse HEAD)"
-          echo "Checked out: $HEAD"
-          if [ "$HEAD" != "$SIGNAL_FORENSICS_REF" ]; then
-            echo "::error::Expected commit $SIGNAL_FORENSICS_REF but got $HEAD"
-            exit 1
-          fi
-
-      - name: Set up Python
-        uses: actions/setup-python@v5
+      - uses: actions/setup-python@v5
         with:
-          python-version: ${{ env.PYTHON_VERSION }}
+          python-version: "3.11"
 
-      - name: Install Poetry
-        run: pip install poetry
-
-      - name: Install project dependencies
+      - name: deps
         working-directory: SignalForensics
         run: |
+          pip install poetry
           poetry config virtualenvs.in-project true
-          poetry install --no-interaction --no-ansi
+          poetry install
           poetry run pip install pyinstaller
 
-      - name: Build Windows EXE
+      - name: build
         working-directory: SignalForensics
-        shell: pwsh
-        run: |
-          $extraArgs = @()
-          if (Test-Path "templates") {
-            $extraArgs += "--add-data=templates;templates"
-          }
-          if (Test-Path "images") {
-            $extraArgs += "--add-data=images;images"
-          }
+        run: >
+          poetry run pyinstaller
+          --noconfirm --clean --onefile --console
+          --name SignalForensics
+          --collect-all sqlcipher3
+          --collect-all cryptography
+          --collect-submodules modules
+          --hidden-import sqlcipher3
+          --hidden-import win32crypt
+          --hidden-import win32api
+          --hidden-import pywintypes
+          --hidden-import pythoncom
+          "--add-data=templates;templates"
+          "--add-data=images;images"
+          decrypt_signal.py
 
-          poetry run pyinstaller `
-            --noconfirm `
-            --clean `
-            --onefile `
-            --console `
-            --name SignalForensics `
-            --collect-all sqlcipher3 `
-            --collect-all cryptography `
-            --collect-submodules modules `
-            --hidden-import sqlcipher3 `
-            --hidden-import win32crypt `
-            --hidden-import win32api `
-            --hidden-import pywintypes `
-            --hidden-import pythoncom `
-            @extraArgs `
-            decrypt_signal.py
-
-          if (-not (Test-Path "dist\SignalForensics.exe")) {
-            throw "EXE was not produced at dist\SignalForensics.exe"
-          }
-
-          Get-Item "dist\SignalForensics.exe" | Format-List Name, Length, LastWriteTime
-
-      - name: Smoke-test EXE
-        working-directory: SignalForensics
-        shell: pwsh
-        run: |
-          .\dist\SignalForensics.exe --help
-          .\dist\SignalForensics.exe --version
-
-      - name: Upload build artifact
-        uses: actions/upload-artifact@v4
+      - uses: softprops/action-gh-release@v2
         with:
-          name: SignalForensics-windows
-          path: SignalForensics/dist/SignalForensics.exe
-          if-no-files-found: error
-
-      - name: Create GitHub Release
-        uses: softprops/action-gh-release@v2
-        with:
-          tag_name: ${{ env.RELEASE_TAG }}
-          name: Latest builds
-          body: |
-            Windows builds published by this repository.
-
-            ### SignalForensics
-            Built from [labcif/SignalForensics](https://github.com/labcif/SignalForensics) @ [`${{ env.SIGNAL_FORENSICS_REF }}`](https://github.com/labcif/SignalForensics/commit/${{ env.SIGNAL_FORENSICS_REF }}).
-
-            ```
-            SignalForensics.exe -h
-            ```
-
-            ### DPAPI-reader
-            ```
-            DPAPI-reader.exe -user <username> -password <password>
-            ```
+          tag_name: latest
           files: SignalForensics/dist/SignalForensics.exe
-          fail_on_unmatched_files: true
-          make_latest: true

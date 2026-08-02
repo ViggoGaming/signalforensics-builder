@@ -16,141 +16,131 @@ import (
 	"github.com/wat4r/dpapitk/utils"
 )
 
-type Result struct {
-	AuxKey string `json:"aux_key"`
-}
-
-func findUserProfile(username string) (string, error) {
-	roots := []string{
-		`C:\Users`,
-		os.Getenv("SystemDrive") + `\Users`,
-		filepath.Join(os.Getenv("USERPROFILE"), ".."),
-	}
-	for _, root := range roots {
-		profile := filepath.Join(root, username)
-		if st, err := os.Stat(profile); err == nil && st.IsDir() {
-			return profile, nil
+func userProfile(name string) string {
+	for _, root := range []string{`C:\Users`, os.Getenv("SystemDrive") + `\Users`} {
+		p := filepath.Join(root, name)
+		if st, err := os.Stat(p); err == nil && st.IsDir() {
+			return p
 		}
 	}
-	return "", fmt.Errorf("user profile for '%s' not found", username)
+	log.Fatalf("profile not found: %s", name)
+	return ""
 }
 
-func findSIDAndMasterKey(profile string) (sid, mkPath string, err error) {
-	candidates := []string{
-		filepath.Join(profile, "AppData", "Roaming", "Microsoft", "Protect"),
+func findMasterkey(profile string) (sid, path string) {
+	for _, base := range []string{
+		filepath.Join(profile, `AppData\Roaming\Microsoft\Protect`),
 		filepath.Join(profile, "Desktop", "Protect"),
 		filepath.Join(profile, "Documents", "Protect"),
-	}
-	for _, base := range candidates {
-		entries, err := os.ReadDir(base)
+	} {
+		ents, err := os.ReadDir(base)
 		if err != nil {
 			continue
 		}
-		for _, e := range entries {
-			if e.IsDir() && strings.HasPrefix(e.Name(), "S-1-5-21-") {
-				sid = e.Name()
-				sidDir := filepath.Join(base, sid)
-				files, _ := os.ReadDir(sidDir)
-				for _, f := range files {
-					name := f.Name()
-					if !f.IsDir() && len(name) == 36 && strings.Count(name, "-") == 4 {
-						return sid, filepath.Join(sidDir, name), nil
-					}
+		for _, e := range ents {
+			if !e.IsDir() || !strings.HasPrefix(e.Name(), "S-1-5-21-") {
+				continue
+			}
+			sid = e.Name()
+			files, _ := os.ReadDir(filepath.Join(base, sid))
+			for _, f := range files {
+				n := f.Name()
+				if !f.IsDir() && len(n) == 36 && strings.Count(n, "-") == 4 {
+					return sid, filepath.Join(base, sid, n)
 				}
 			}
 		}
 	}
-	return "", "", fmt.Errorf("no masterkey found for user profile %s", profile)
+	log.Fatal("no masterkey found")
+	return "", ""
 }
 
-func findLocalState(profile string) (string, error) {
-	candidates := []string{
-		filepath.Join(profile, "AppData", "Roaming", "Signal", "Local State"),
+func findLocalState(profile string) string {
+	for _, p := range []string{
+		filepath.Join(profile, `AppData\Roaming\Signal\Local State`),
 		filepath.Join(profile, "Desktop", "Signal", "Local State"),
 		filepath.Join(profile, "Documents", "Signal", "Local State"),
-	}
-	for _, p := range candidates {
+	} {
 		if _, err := os.Stat(p); err == nil {
-			return p, nil
+			return p
 		}
 	}
-	return "", fmt.Errorf("Signal Local State not found under %s", profile)
+	log.Fatal("Local State not found")
+	return ""
 }
 
-func extractBlob(localStatePath string) ([]byte, error) {
-	data, err := os.ReadFile(localStatePath)
+func readEncryptedKey(path string) []byte {
+	b, err := os.ReadFile(path)
 	if err != nil {
-		return nil, err
+		log.Fatal(err)
 	}
-	var js struct {
+	var ls struct {
 		OsCrypt struct {
 			EncryptedKey string `json:"encrypted_key"`
 		} `json:"os_crypt"`
 	}
-	if err := json.Unmarshal(data, &js); err != nil {
-		return nil, err
+	if err := json.Unmarshal(b, &ls); err != nil {
+		log.Fatal(err)
 	}
-	if js.OsCrypt.EncryptedKey == "" {
-		return nil, fmt.Errorf("encrypted_key not found in Local State")
-	}
-	raw, err := base64.StdEncoding.DecodeString(js.OsCrypt.EncryptedKey)
+	raw, err := base64.StdEncoding.DecodeString(ls.OsCrypt.EncryptedKey)
 	if err != nil {
-		return nil, err
+		log.Fatal(err)
 	}
 	if len(raw) > 5 && string(raw[:5]) == "DPAPI" {
-		return raw[5:], nil
+		raw = raw[5:]
 	}
-	return raw, nil
+	return raw
+}
+
+func decryptAux(mkPath, sid, password string, data []byte) string {
+	mk := masterkey.InitMasterKeyFile(utils.ReadFile(mkPath))
+	mk.DecryptWithPassword(sid, password)
+	if !mk.Decrypted {
+		log.Fatal("masterkey decrypt failed (bad password?)")
+	}
+	key, err := blob.DecryptWithMasterKey(data, mk.Key, nil)
+	if err != nil {
+		log.Fatal(err)
+	}
+	return hex.EncodeToString(key)
 }
 
 func main() {
-	user := flag.String("user", "", "Windows username (e.g. prh)")
-	password := flag.String("password", "", "Windows password")
+	mode := flag.String("m", "live", "live|offline")
+	user := flag.String("user", "", "")
+	password := flag.String("password", "", "")
+	mkPath := flag.String("masterkey", "", "")
+	sidFlag := flag.String("sid", "", "")
+	lsPath := flag.String("localstate", "", "")
 	flag.Parse()
 
-	if *user == "" || *password == "" {
-		fmt.Fprintf(os.Stderr, "Usage: %s -user <username> -password <password>\n", os.Args[0])
+	if *password == "" {
+		fmt.Fprintf(os.Stderr, "live:    %s -user USER -password PASS\n", os.Args[0])
+		fmt.Fprintf(os.Stderr, "offline: %s -m offline -masterkey FILE -sid SID -password PASS -localstate FILE\n", os.Args[0])
 		os.Exit(1)
 	}
 
-	profile, err := findUserProfile(*user)
-	if err != nil {
-		log.Fatal(err)
+	var sid, mk string
+	var enc []byte
+
+	switch strings.ToLower(*mode) {
+	case "live":
+		if *user == "" {
+			log.Fatal("-user required")
+		}
+		prof := userProfile(*user)
+		sid, mk = findMasterkey(prof)
+		enc = readEncryptedKey(findLocalState(prof))
+	case "offline":
+		if *mkPath == "" || *sidFlag == "" || *lsPath == "" {
+			log.Fatal("offline needs -masterkey, -sid, -localstate")
+		}
+		sid, mk = *sidFlag, *mkPath
+		enc = readEncryptedKey(*lsPath)
+	default:
+		log.Fatalf("unknown mode %q", *mode)
 	}
 
-	sid, mkPath, err := findSIDAndMasterKey(profile)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	localState, err := findLocalState(profile)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	blobData, err := extractBlob(localState)
-	if err != nil {
-		log.Fatal(err)
-	}
-
-	mkData := utils.ReadFile(mkPath)
-	mk := masterkey.InitMasterKeyFile(mkData)
-	mk.DecryptWithPassword(sid, *password)
-
-	if !mk.Decrypted {
-		log.Fatal("Failed to decrypt masterkey wrong password?")
-	}
-
-	auxKey, err := blob.DecryptWithMasterKey(blobData, mk.Key, nil)
-	if err != nil {
-		log.Fatalf("Failed to decrypt auxiliary key: %v", err)
-	}
-
-	result := Result{
-		AuxKey: hex.EncodeToString(auxKey),
-	}
-
-	enc := json.NewEncoder(os.Stdout)
-	enc.SetIndent("", "  ")
-	enc.Encode(result)
+	out, _ := json.MarshalIndent(map[string]string{"aux_key": decryptAux(mk, sid, *password, enc)}, "", "  ")
+	fmt.Println(string(out))
 }

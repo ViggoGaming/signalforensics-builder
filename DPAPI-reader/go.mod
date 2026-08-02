@@ -1,4 +1,4 @@
-module github.com/ViggoGaming/signalforensics-builder/DPAPI-reader
+module dpapi-reader
 
 go 1.23.2
 
